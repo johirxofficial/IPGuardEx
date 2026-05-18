@@ -11,12 +11,27 @@ from flask import Flask, request, jsonify, render_template_string
 from dotenv import load_dotenv, set_key
 
 # ==============================================================================
-# ENVIRONMENT & DYNAMIC CONFIGURATION LOADER
+# CLEAR COMMAND EXECUTION & ENVIRONMENT LOADER
 # ==============================================================================
 ENV_FILE = ".env"
+STATE_FILE = "state.json"
+TARGETS_FILE = "targets.json"
+LOG_FILE = "ping_logger.log"
+
+# ক্লিয়ার কমান্ড এক্সিকিউশন
+if '--clear' in sys.argv:
+    print("\n" + "="*50)
+    print("🗑️  CLEARING ALL CONFIGURATIONS & DATA...")
+    print("="*50)
+    for f in [ENV_FILE, STATE_FILE, TARGETS_FILE, LOG_FILE]:
+        if os.path.exists(f):
+            os.remove(f)
+            print(f"[-] Deleted: {f}")
+    print("\n✅ Project reset to factory state! Run 'python index.py' to start fresh.\n")
+    sys.exit(0)
 
 def load_env_or_prompt():
-    """ইউজারের কনফিগারেশন লোড বা ইনপুট নেওয়ার মেকানিজম (Local + Cloud Ready)"""
+    """ইউজারের কনফিগারেশন লোড বা ইনপুট নেওয়ার মেকানিজম"""
     load_dotenv(ENV_FILE)
     config = {
         'BOT_TOKEN': os.getenv('BOT_TOKEN', ''),
@@ -29,34 +44,28 @@ def load_env_or_prompt():
     missing_or_empty = [k for k in required_keys if not config[k]]
     
     if missing_or_empty:
-        # Interactive mode (Local PC run)
-        if sys.stdin.isatty():
-            print("\n" + "="*60)
-            print("⚙️  IPGUARDEX INITIAL SETUP (FIRST TIME RUN) ⚙️")
-            print("="*60)
+        print("\n" + "="*60)
+        print("⚙️  IPGUARDEX INITIAL SETUP (FIRST TIME RUN) ⚙️")
+        print("="*60)
+        
+        if 'BOT_TOKEN' in missing_or_empty:
+            config['BOT_TOKEN'] = input("🔹 Enter Telegram Bot Token: ").strip()
+        if 'CHAT_ID' in missing_or_empty:
+            config['CHAT_ID'] = input("🔹 Enter Telegram Chat ID: ").strip()
+        if 'WEB_NAME' in missing_or_empty:
+            config['WEB_NAME'] = input("🔹 Enter Dashboard Title (Web Name): ").strip() or "IPGuardex Core"
+        if 'PORT' in missing_or_empty:
+            config['PORT'] = input("🔹 Enter Flask Web Port (Default 5000): ").strip() or "5000"
             
-            if 'BOT_TOKEN' in missing_or_empty:
-                config['BOT_TOKEN'] = input("🔹 Enter Telegram Bot Token: ").strip()
-            if 'CHAT_ID' in missing_or_empty:
-                config['CHAT_ID'] = input("🔹 Enter Telegram Chat ID: ").strip()
-            if 'WEB_NAME' in missing_or_empty:
-                config['WEB_NAME'] = input("🔹 Enter Dashboard Title (Web Name): ").strip() or "IPGuardex Core"
-            if 'PORT' in missing_or_empty:
-                config['PORT'] = input("🔹 Enter Flask Web Port (Default 5000): ").strip() or "5000"
-                
-            # .env ফাইলে সেভ করা
-            if not os.path.exists(ENV_FILE):
-                with open(ENV_FILE, 'w') as f: pass
+        # .env ফাইলে সেভ করা
+        if not os.path.exists(ENV_FILE):
+            with open(ENV_FILE, 'w') as f: pass
             
-            for k, v in config.items():
-                set_key(ENV_FILE, k, v)
-            print("\n✅ Configuration saved to .env file successfully!")
-            print("="*60 + "\n")
-        else:
-            # Non-interactive mode (Docker/Cloud run)
-            print("❌ FATAL ERROR: Missing environment variables. Please set BOT_TOKEN, CHAT_ID, WEB_NAME, and PORT.")
-            sys.exit(1)
-            
+        for k, v in config.items():
+            set_key(ENV_FILE, k, v)
+        print("\n✅ Configuration saved securely! Next time it will auto-start.")
+        print("="*60 + "\n")
+        
     return config
 
 # কনফিগারেশন সেটআপ
@@ -65,11 +74,7 @@ BOT_TOKEN = ENV_CONFIG['BOT_TOKEN']
 CHAT_ID = ENV_CONFIG['CHAT_ID']
 WEB_NAME = ENV_CONFIG['WEB_NAME']
 RUN_PORT = int(ENV_CONFIG['PORT'])
-DOWN_ALERT_INTERVAL = 600  # ১০ মিনিট পর পর রিমাইন্ডার
-
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TARGETS_FILE = os.path.join(BASE_DIR, 'targets.json')
-LOG_FILE = os.path.join(BASE_DIR, 'ping_logger.log')
+DOWN_ALERT_INTERVAL = 600  # ১০ মিনিট
 
 LIVE_DOWNTIMES = {}
 LIVE_UPTIMES = {}  
@@ -77,6 +82,9 @@ HISTORY_LOGS = []
 
 app = Flask(__name__)
 
+# ==============================================================================
+# PERSISTENT STORAGE ENGINE (CRASH / RESTART PROOF)
+# ==============================================================================
 def init_storage():
     global HISTORY_LOGS
     if not os.path.exists(TARGETS_FILE) or os.path.getsize(TARGETS_FILE) == 0:
@@ -90,6 +98,9 @@ def init_storage():
                 HISTORY_LOGS = data.get('history', [])
         except:
             HISTORY_LOGS = []
+
+    # রিস্টার্টের পরেও লাইভ স্টেট ব্যাকআপ থেকে লোড করা
+    load_state()
 
 def load_targets():
     try:
@@ -112,6 +123,27 @@ def save_history():
     except:
         pass
 
+def load_state():
+    """স্ক্রিপ্ট রিস্টার্ট হলে লাইভ ডাউন/আপ ডাটা লোড করবে"""
+    global LIVE_DOWNTIMES, LIVE_UPTIMES
+    if os.path.exists(STATE_FILE) and os.path.getsize(STATE_FILE) > 0:
+        try:
+            with open(STATE_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                LIVE_DOWNTIMES = data.get('downtimes', {})
+                LIVE_UPTIMES = data.get('uptimes', {})
+                print("[+] Restored live monitoring state from backup.")
+        except:
+            LIVE_DOWNTIMES, LIVE_UPTIMES = {}, {}
+
+def save_state():
+    """প্রতিবার স্টেট চেঞ্জ হলে ডিস্কে সেভ করবে (যেন রিস্টার্টে হারিয়ে না যায়)"""
+    try:
+        with open(STATE_FILE, 'w', encoding='utf-8') as f:
+            json.dump({'downtimes': LIVE_DOWNTIMES, 'uptimes': LIVE_UPTIMES}, f, indent=4)
+    except Exception as e:
+        print(f"[-] State Save Error: {e}")
+
 # ==============================================================================
 # CORE MONITORING ENGINE
 # ==============================================================================
@@ -125,7 +157,6 @@ def send_telegram_message(message):
 def check_network_state(ip, port=None):
     if not port:
         try:
-            # Linux/Mac compatible ping
             output = subprocess.run(["ping", "-c", "1", "-W", "1", ip], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             return output.returncode == 0
         except:
@@ -142,7 +173,7 @@ def check_network_state(ip, port=None):
 
 def bg_monitoring_loop():
     global LIVE_DOWNTIMES, LIVE_UPTIMES, HISTORY_LOGS
-    print(f"🚀 {WEB_NAME} Monitoring Engine Started Successfully...")
+    print(f"🚀 {WEB_NAME} Monitoring Engine Started...")
     
     while True:
         try:
@@ -150,10 +181,18 @@ def bg_monitoring_loop():
             time_string = datetime.now().strftime("%I:%M:%S %p")
             TARGETS = load_targets()
 
+            # ডাটাবেসে না থাকা টার্গেট মেমোরি থেকে ক্লিয়ার করা
+            state_changed = False
             for name in list(LIVE_DOWNTIMES.keys()):
-                if name not in TARGETS: del LIVE_DOWNTIMES[name]
+                if name not in TARGETS: 
+                    del LIVE_DOWNTIMES[name]
+                    state_changed = True
             for name in list(LIVE_UPTIMES.keys()):
-                if name not in TARGETS: del LIVE_UPTIMES[name]
+                if name not in TARGETS: 
+                    del LIVE_UPTIMES[name]
+                    state_changed = True
+            
+            if state_changed: save_state() # ডিলিট হলে স্টেট আপডেট
 
             for name, target in TARGETS.items():
                 ip = target['ip']
@@ -167,13 +206,16 @@ def bg_monitoring_loop():
                 target_label = f"{ip}:{port}" if port else f"{ip} (Ping)"
 
                 if not is_online:
-                    if name in LIVE_UPTIMES: del LIVE_UPTIMES[name]
+                    if name in LIVE_UPTIMES:
+                        del LIVE_UPTIMES[name]
+                        save_state()
 
                     if name not in LIVE_DOWNTIMES:
                         LIVE_DOWNTIMES[name] = {
                             'ip': ip, 'port': port, 'down_since': current_time,
                             'down_time_str': time_string, 'last_alert_sent': current_time
                         }
+                        save_state() # নতুন ডাউন স্টেট সেভ
                         send_telegram_message(f"🚨 *SERVER DOWN ALERT!*\n\n🖥️ *Host:* {name}\n🌐 *Target:* {target_label}\n⏰ *সময়:* {time_string}\n⚠️ *Status:* CRITICAL / OFFLINE")
                     else:
                         down_since = LIVE_DOWNTIMES[name]['down_since']
@@ -184,8 +226,11 @@ def bg_monitoring_loop():
                             duration_text = f"{m}m {s}s" if m > 0 else f"{s}s"
                             send_telegram_message(f"⚠️ *REMINDER: SERVER STILL DOWN!*\n\n🖥️ *Host:* {name}\n🌐 *Target:* {target_label}\n⏳ *মোট ডাউন টাইম:* {duration_text}")
                             LIVE_DOWNTIMES[name]['last_alert_sent'] = current_time
+                            save_state() # রিমাইন্ডার টাইম আপডেট সেভ
                 else:
-                    if name not in LIVE_UPTIMES: LIVE_UPTIMES[name] = current_time
+                    if name not in LIVE_UPTIMES:
+                        LIVE_UPTIMES[name] = current_time
+                        save_state() # নতুন আপ স্টেট সেভ
 
                     if name in LIVE_DOWNTIMES:
                         down_since = LIVE_DOWNTIMES[name]['down_since']
@@ -201,7 +246,9 @@ def bg_monitoring_loop():
                         })
                         if len(HISTORY_LOGS) > 100: HISTORY_LOGS.pop(0)
                         save_history()
+                        
                         del LIVE_DOWNTIMES[name]
+                        save_state() # ডাউন থেকে আপে এসে স্টেট সেভ
 
         except Exception as loop_err:
             print(f"[-] Loop Warning: {loop_err}")
@@ -238,18 +285,15 @@ HTML_TEMPLATE = """
             -webkit-backdrop-filter: blur(16px); border: 1px solid rgba(255, 255, 255, 0.05);
             border-radius: 16px; box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
         }
-        
         .server-card {
             background: linear-gradient(180deg, rgba(30, 41, 59, 0.4) 0%, rgba(15, 23, 42, 0.4) 100%);
             border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 12px;
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-            backdrop-filter: blur(10px);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1); backdrop-filter: blur(10px);
         }
         .server-card:hover {
             transform: translateY(-4px); border-color: rgba(139, 92, 246, 0.4);
             box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5), 0 8px 10px -6px rgba(139, 92, 246, 0.2);
         }
-        
         @keyframes customPulse {
             0%, 100% { opacity: 1; transform: scale(1); }
             50% { opacity: 0.5; transform: scale(1.1); }
@@ -262,7 +306,6 @@ HTML_TEMPLATE = """
 </head>
 <body class="p-3 md:p-6 lg:p-8">
     <div class="max-w-[1600px] mx-auto space-y-6">
-        
         <div class="glass-panel p-5 flex flex-col sm:flex-row justify-between items-center gap-4">
             <div class="flex items-center gap-4">
                 <div class="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500/20 to-purple-500/20 flex items-center justify-center border border-indigo-500/30 text-indigo-400 text-2xl">
@@ -270,7 +313,7 @@ HTML_TEMPLATE = """
                 </div>
                 <div>
                     <h1 class="text-xl md:text-2xl font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 via-indigo-400 to-purple-400 uppercase">{{ web_name }}</h1>
-                    <p class="text-[11px] md:text-xs text-slate-400 font-mono">Live Grid Engine • Connected</p>
+                    <p class="text-[11px] md:text-xs text-slate-400 font-mono">Live Grid Engine • Crash-Proof Persistence Active</p>
                 </div>
             </div>
             <button onclick="openModal()" class="px-5 py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 rounded-xl font-bold text-xs md:text-sm transition-all shadow-[0_0_15px_rgba(79,70,229,0.3)] flex items-center gap-2 text-white">
@@ -278,7 +321,6 @@ HTML_TEMPLATE = """
             </button>
         </div>
 
-        <!-- Stats Bar Upgrade -->
         <div class="grid grid-cols-3 gap-4">
             <div class="glass-panel p-4 flex items-center gap-3">
                 <div class="w-10 h-10 rounded-lg bg-indigo-500/10 flex items-center justify-center text-indigo-400"><i class="fa-solid fa-server"></i></div>
@@ -488,6 +530,10 @@ def delete_target():
     if name in targets:
         del targets[name]
         save_targets(targets)
+        # টার্গেট ডিলিট হলে স্টেট থেকেও মুছে ফেলা হচ্ছে (লুপের কাজ এড়াতে এখানেও দিলাম)
+        if name in LIVE_DOWNTIMES: del LIVE_DOWNTIMES[name]
+        if name in LIVE_UPTIMES: del LIVE_UPTIMES[name]
+        save_state()
         return jsonify({"status": "success"})
     return jsonify({"status": "error"}), 404
 
