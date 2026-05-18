@@ -1,0 +1,17 @@
+# Environment variables
+.env
+
+# Database & Logs
+targets.json
+ping_logger.log
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
