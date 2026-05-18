@@ -1,17 +1,9 @@
-# Environment variables
+# Environment & Local State Data
 .env
-
-# Database & Logs
 targets.json
+state.json
 ping_logger.log
 
-# Python
+# Python Cache
 __pycache__/
 *.py[cod]
-*.so
-venv/
-env/
-
-# IDE
-.vscode/
-.idea/
