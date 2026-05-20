@@ -1,5 +1,7 @@
-# Environment & Local State Data
+# Environment Variables
 .env
+
+# Dynamic State & Database
 targets.json
 state.json
 ping_logger.log
@@ -7,3 +9,6 @@ ping_logger.log
 # Python Cache
 __pycache__/
 *.py[cod]
+*.so
+venv/
+env/
