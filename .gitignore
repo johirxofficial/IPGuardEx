@@ -9,6 +9,5 @@ ping_logger.log
 # Python Cache
 __pycache__/
 *.py[cod]
-*.so
 venv/
 env/
